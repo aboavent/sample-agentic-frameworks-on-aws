@@ -1,0 +1,50 @@
+# Name for the GitHub Actions workflow
+name: "JFrog OIDC CI Workflow"
+
+# Trigger this workflow on every push to any branch
+on: push
+
+# Define the permissions required by the job
+permissions:
+  # This is required for requesting the OIDC token from GitHub
+  id-token: write
+  # This is required for the actions/checkout step to read the repository's code
+  contents: read
+
+jobs:
+  build-and-publish-to-jfrog:
+    # Use the latest Ubuntu runner
+    runs-on: ubuntu-latest
+    steps:
+      # Step 1: Check out the repository's code
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Step 2: Set up and configure the JFrog CLI with OIDC
+      - name: Setup JFrog CLI
+        uses: jfrog/setup-jfrog-cli@v4
+        env:
+          # The URL of your JFrog Platform. This is read from a GitHub Actions variable.
+          JF_URL: ${{ vars.JF_URL }}
+        with:
+          # This MUST match the "Provider Name" you configured in the JFrog UI.
+          oidc-provider-name: github-oidc-integration
+
+      # Step 3: Run JFrog CLI commands
+      - name: Run JFrog CLI
+        run: |
+          # Verify the connection and authentication to JFrog
+          echo "Pinging JFrog Platform..."
+          jf rt ping
+
+          # Collect environment variables for the build-info record
+          echo "Collecting build environment variables..."
+          jf rt bce
+
+          # Collect Git information for the build-info record
+          echo "Collecting Git information..."
+          jf rt bag
+
+          # Publish the collected build information to the JFrog Platform
+          echo "Publishing build info..."
+          jf rt bp
