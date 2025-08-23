@@ -1,4 +1,4 @@
-## Agentic Frameworks on AWS (Test Jfrog - Jesus is the Lord)
+## Agentic Frameworks on AWS (I Love you Jesus)
 
 <p align="center">
   <img src="docs/agentic-frameworks-on-aws.png" alt="Project banner" width="1000">
