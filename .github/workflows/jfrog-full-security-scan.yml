@@ -7,13 +7,13 @@ permissions:
   contents: read
 
 env:
-  # Your full file (kept for reference; not used for the fast install)
+  # Your full requirements (kept for reference if you ever switch back)
   REQS_FILE: langgraph/network-security-agent/setup/requirements.txt
-  # Optional tiny file you can add to the repo for fast installs (e.g., requests==2.19.1)
+  # Optional tiny file for fast installs (e.g., requests==2.19.1)
   REQS_FAST_FILE: .jfrog/fast-requirements.txt
   BUILD_NAME: jfrog-security-scan-build
   BUILD_NUMBER: ${{ github.run_id }}
-  GENERIC_REPO: ${{ vars.GENERIC_REPO }}
+  GENERIC_REPO: ${{ vars.GENERIC_REPO }}           # e.g., my-generic-repo
 
 jobs:
   build-scan-and-publish:
@@ -30,7 +30,7 @@ jobs:
       - name: Setup JFrog CLI (OIDC)
         uses: jfrog/setup-jfrog-cli@v4
         env:
-          JF_URL: ${{ vars.JF_URL }}
+          JF_URL: ${{ vars.JF_URL }}                # e.g. https://<your-domain>.jfrog.io
         with:
           oidc-provider-name: github-oidc-integration
 
@@ -61,7 +61,7 @@ jobs:
         run: |
           jf scan . --fail=false --format table
 
-      # --- Refresh OIDC so we start installs with a fresh token ---
+      # --- Refresh OIDC so installs start with a fresh token ---
       - name: Re-authenticate JFrog CLI (refresh OIDC)
         uses: jfrog/setup-jfrog-cli@v4
         env:
@@ -78,13 +78,13 @@ jobs:
             --repo-resolve "${{ vars.PYPI_VIRTUAL_REPO }}" \
             --server-id-resolve "$SERVER_ID"
 
-      # --- Avoid pip probing /simple/pip/ (prevents 401 chatter) ---
+      # --- Avoid pip probing /simple/pip/ (cuts extra 401s) ---
       - name: Disable pip self version check
         shell: bash
         run: echo "PIP_DISABLE_PIP_VERSION_CHECK=1" >> "$GITHUB_ENV"
 
       # --- FAST install to capture a CVE into build-info (minimal deps) ---
-      # If .jfrog/fast-requirements.txt exists, use it. Otherwise, just install requests==2.19.1 with --no-deps.
+      # If .jfrog/fast-requirements.txt exists, use it; else just install requests==2.19.1 with --no-deps.
       - name: Install deps via JFrog CLI (fast capture)
         shell: bash
         run: |
@@ -103,12 +103,14 @@ jobs:
           fi
           echo "Installed packages snapshot:"; pip freeze | egrep 'requests|urllib3|PyYAML' || true
 
-      # --- Upload repository artifacts (attach to the same build) ---
+      # --- Upload repository artifacts (exclude dot-dirs) ---
       - name: Upload repository artifacts
         shell: bash
         run: |
           echo "Uploading source code as artifacts to $GENERIC_REPO..."
-          jf rt u "**/*" "$GENERIC_REPO/" --flat=false \
+          jf rt u "**/*" "$GENERIC_REPO/" \
+            --flat=false \
+            --exclusions="**/.git/**;**/.github/**;**/.jfrog/**" \
             --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER"
 
       # --- Publish & Scan the build (non-blocking) ---
