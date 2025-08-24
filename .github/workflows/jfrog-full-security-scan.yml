@@ -37,9 +37,10 @@ jobs:
             sudo apt-get update -y && sudo apt-get install -y jq
           fi
 
-      - name: Sanity: show PyPI virtual repo details
+      - name: "Sanity: show PyPI virtual repo details"
         shell: bash
         run: |
+          set -euo pipefail
           KEY="${{ vars.PYPI_VIRTUAL_REPO }}"
           echo "Using PYPI_VIRTUAL_REPO=$KEY"
           jf rt curl -s -XGET "/api/repositories/$KEY" | jq '{key,packageType,type,repositories,defaultDeploymentRepo}'
@@ -55,7 +56,7 @@ jobs:
         run: |
           jf audit --pip --requirements-file "$REQS_FILE" --fail=false --format table
 
-      # --- Code/Secrets/IaC scan (no install) ---
+      # --- Code/Secrets/IaC (no install) ---
       - name: Scan repository (non-blocking)
         shell: bash
         run: |
