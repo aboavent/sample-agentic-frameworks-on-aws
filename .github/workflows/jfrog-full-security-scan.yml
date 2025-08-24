@@ -7,9 +7,7 @@ permissions:
   contents: read
 
 env:
-  # Your full requirements (kept for reference if you ever switch back)
   REQS_FILE: langgraph/network-security-agent/setup/requirements.txt
-  # Optional tiny file for fast installs (e.g., requests==2.19.1)
   REQS_FAST_FILE: .jfrog/fast-requirements.txt
   BUILD_NAME: jfrog-security-scan-build
   BUILD_NUMBER: ${{ github.run_id }}
@@ -84,7 +82,6 @@ jobs:
         run: echo "PIP_DISABLE_PIP_VERSION_CHECK=1" >> "$GITHUB_ENV"
 
       # --- FAST install to capture a CVE into build-info (minimal deps) ---
-      # If .jfrog/fast-requirements.txt exists, use it; else just install requests==2.19.1 with --no-deps.
       - name: Install deps via JFrog CLI (fast capture)
         shell: bash
         run: |
@@ -103,14 +100,31 @@ jobs:
           fi
           echo "Installed packages snapshot:"; pip freeze | egrep 'requests|urllib3|PyYAML' || true
 
-      # --- Upload repository artifacts (exclude dot-dirs) ---
-      - name: Upload repository artifacts
+      # --- Create an upload spec that excludes dot-directories ---
+      - name: Create upload spec with exclusions
         shell: bash
         run: |
-          echo "Uploading source code as artifacts to $GENERIC_REPO..."
-          jf rt u "**/*" "$GENERIC_REPO/" \
-            --flat=false \
-            --exclusions="**/.git/**;**/.github/**;**/.jfrog/**" \
+          cat > upload-spec.json <<EOF
+          {
+            "files": [
+              {
+                "pattern": "**/*",
+                "target": "${GENERIC_REPO}/",
+                "recursive": true,
+                "flat": false,
+                "exclusions": ["**/.git/**", "**/.github/**", "**/.jfrog/**", ".git/**", ".github/**", ".jfrog/**"]
+              }
+            ]
+          }
+          EOF
+          echo "Upload spec:"
+          cat upload-spec.json
+
+      # --- Upload repository artifacts using the spec (no dot-dirs) ---
+      - name: Upload repository artifacts (spec)
+        shell: bash
+        run: |
+          jf rt u --spec=upload-spec.json \
             --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER"
 
       # --- Publish & Scan the build (non-blocking) ---
