@@ -33,7 +33,7 @@ jobs:
 
           # 2. Scan the build for vulnerabilities against your Xray policies
           echo "Scanning build..."
-          jf rt bs $BUILD_NAME $BUILD_NUMBER --fail=false
+          jf bs $BUILD_NAME $BUILD_NUMBER --fail=false
 
           # 3. Publish the build information (including scan results)
           echo "Publishing build info..."
