@@ -10,6 +10,7 @@ env:
   REQS_FILE: langgraph/network-security-agent/setup/requirements.txt
   BUILD_NAME: jfrog-security-scan-build
   BUILD_NUMBER: ${{ github.run_id }}
+  GENERIC_REPO: ${{ vars.GENERIC_REPO }}            # e.g., my-generic-repo
 
 jobs:
   build-scan-and-publish:
@@ -26,9 +27,9 @@ jobs:
       - name: Setup JFrog CLI
         uses: jfrog/setup-jfrog-cli@v4
         env:
-          JF_URL: ${{ vars.JF_URL }}
+          JF_URL: ${{ vars.JF_URL }}                  # e.g. https://<your-domain>.jfrog.io
         with:
-          oidc-provider-name: github-oidc-integration
+          oidc-provider-name: github-oidc-integration # must match your JFrog OIDC integration
 
       - name: Ensure jq is available
         shell: bash
@@ -48,13 +49,18 @@ jobs:
             echo "### JFrog Settings"
             echo "- **JF_URL**: \`${{ vars.JF_URL }}\`"
             echo "- **PYPI_VIRTUAL_REPO**: \`$KEY\`"
+            echo "- **GENERIC_REPO**: \`${GENERIC_REPO}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       # --- Source SCA (no install) ---
       - name: Audit manifests for CVEs (non-blocking)
         shell: bash
         run: |
-          jf audit --pip --requirements-file "$REQS_FILE" --fail=false --format table
+          set -euo pipefail
+          REQS_ABS="$GITHUB_WORKSPACE/$REQS_FILE"
+          echo "Auditing requirements at: $REQS_ABS"
+          ls -l "$REQS_ABS"
+          jf audit --pip --requirements-file "$REQS_ABS" --fail=false --format table
 
       # --- Code/Secrets/IaC (no install) ---
       - name: Scan repository (non-blocking)
@@ -70,16 +76,18 @@ jobs:
       - name: Install deps via JFrog CLI (captures deps to build-info)
         shell: bash
         run: |
+          set -euo pipefail
+          REQS_ABS="$GITHUB_WORKSPACE/$REQS_FILE"
           pip uninstall -y requests urllib3 PyYAML || true
-          jf pip install -r "$REQS_FILE" \
+          jf pip install -r "$REQS_ABS" \
             --build-name "$BUILD_NAME" --build-number "$BUILD_NUMBER"
           echo "Installed versions:"; pip freeze | egrep 'requests|urllib3|PyYAML' || true
 
       - name: Upload repository artifacts
         shell: bash
         run: |
-          echo "Uploading source code as artifacts..."
-          jf rt u "**/*" "my-generic-repo/" --flat=false \
+          echo "Uploading source code as artifacts to $GENERIC_REPO..."
+          jf rt u "**/*" "$GENERIC_REPO/" --flat=false \
             --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER"
 
       - name: Publish build info
