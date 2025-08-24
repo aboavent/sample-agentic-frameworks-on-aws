@@ -8,7 +8,7 @@ permissions:
 
 env:
   REQS_FILE: langgraph/network-security-agent/setup/requirements.txt
-  REQS_FAST_FILE: .jfrog/fast-requirements.txt
+  REQS_FAST_FILE: ci/fast-requirements.txt          # small, fast file (e.g., requests==2.19.1)
   BUILD_NAME: jfrog-security-scan-build
   BUILD_NUMBER: ${{ github.run_id }}
   GENERIC_REPO: ${{ vars.GENERIC_REPO }}           # e.g., my-generic-repo
@@ -100,31 +100,19 @@ jobs:
           fi
           echo "Installed packages snapshot:"; pip freeze | egrep 'requests|urllib3|PyYAML' || true
 
-      # --- Create an upload spec that excludes dot-directories ---
-      - name: Create upload spec with exclusions
+      # --- Clean up local JFrog metadata so it won't be uploaded ---
+      - name: Remove JFrog local metadata
         shell: bash
-        run: |
-          cat > upload-spec.json <<EOF
-          {
-            "files": [
-              {
-                "pattern": "**/*",
-                "target": "${GENERIC_REPO}/",
-                "recursive": true,
-                "flat": false,
-                "exclusions": ["**/.git/**", "**/.github/**", "**/.jfrog/**", ".git/**", ".github/**", ".jfrog/**"]
-              }
-            ]
-          }
-          EOF
-          echo "Upload spec:"
-          cat upload-spec.json
+        run: rm -rf .jfrog || true
 
-      # --- Upload repository artifacts using the spec (no dot-dirs) ---
-      - name: Upload repository artifacts (spec)
+      # --- Upload repository artifacts (exclude dot-dirs) ---
+      - name: Upload repository artifacts
         shell: bash
         run: |
-          jf rt u --spec=upload-spec.json \
+          echo "Uploading source code as artifacts to $GENERIC_REPO..."
+          jf rt u "**/*" "$GENERIC_REPO/" \
+            --flat=false \
+            --exclusions="**/.git/**;**/.github/**;**/.jfrog/**" \
             --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER"
 
       # --- Publish & Scan the build (non-blocking) ---
