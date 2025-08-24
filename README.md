@@ -1,5 +1,4 @@
-## Agentic Frameworks on AWS (I Love you Jesus)
-
+## Agentic Frameworks on AWS
 <p align="center">
   <img src="docs/agentic-frameworks-on-aws.png" alt="Project banner" width="1000">
 </p>
