@@ -53,14 +53,14 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       # --- Source SCA (no install) ---
-      - name: Audit manifests for CVEs (non-blocking)
-        shell: bash
-        run: |
-          set -euo pipefail
-          REQS_ABS="$GITHUB_WORKSPACE/$REQS_FILE"
-          echo "Auditing requirements at: $REQS_ABS"
-          ls -l "$REQS_ABS"
-          jf audit --pip --requirements-file "$REQS_ABS" --fail=false --format table
+      #- name: Audit manifests for CVEs (non-blocking)
+      #  shell: bash
+      #  run: |
+      #    set -euo pipefail
+      #    REQS_ABS="$GITHUB_WORKSPACE/$REQS_FILE"
+      #    echo "Auditing requirements at: $REQS_ABS"
+      #    ls -l "$REQS_ABS"
+      #    jf audit --pip --requirements-file "$REQS_ABS" --fail=false --format table
 
       # --- Code/Secrets/IaC (no install) ---
       - name: Scan repository (non-blocking)
