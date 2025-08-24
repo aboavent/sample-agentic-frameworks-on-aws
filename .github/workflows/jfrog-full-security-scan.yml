@@ -7,11 +7,13 @@ permissions:
   contents: read
 
 env:
-  REQS_FILE: langgraph/network-security-agent/setup/requirements.txt   # your full file
-  REQS_FAST_FILE: .jfrog/fast-requirements.txt                         # optional small file for faster runs
+  # Your full file (kept for reference; not used for the fast install)
+  REQS_FILE: langgraph/network-security-agent/setup/requirements.txt
+  # Optional tiny file you can add to the repo for fast installs (e.g., requests==2.19.1)
+  REQS_FAST_FILE: .jfrog/fast-requirements.txt
   BUILD_NAME: jfrog-security-scan-build
   BUILD_NUMBER: ${{ github.run_id }}
-  GENERIC_REPO: ${{ vars.GENERIC_REPO }}                               # e.g., my-generic-repo
+  GENERIC_REPO: ${{ vars.GENERIC_REPO }}
 
 jobs:
   build-scan-and-publish:
@@ -28,7 +30,7 @@ jobs:
       - name: Setup JFrog CLI (OIDC)
         uses: jfrog/setup-jfrog-cli@v4
         env:
-          JF_URL: ${{ vars.JF_URL }}                  # e.g. https://<your-domain>.jfrog.io
+          JF_URL: ${{ vars.JF_URL }}
         with:
           oidc-provider-name: github-oidc-integration
 
@@ -53,13 +55,13 @@ jobs:
             echo "- **GENERIC_REPO**: \`${GENERIC_REPO}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # --- Code/Secrets/IaC scan (no install) ---
+      # --- Source/Secrets/IaC scan (no install) ---
       - name: Scan repository (non-blocking)
         shell: bash
         run: |
           jf scan . --fail=false --format table
 
-      # --- Refresh OIDC (keeps token fresh before Artifactory ops) ---
+      # --- Refresh OIDC so we start installs with a fresh token ---
       - name: Re-authenticate JFrog CLI (refresh OIDC)
         uses: jfrog/setup-jfrog-cli@v4
         env:
@@ -67,7 +69,7 @@ jobs:
         with:
           oidc-provider-name: github-oidc-integration
 
-      # --- Build Scan: capture dependency graph and attach artifacts ---
+      # --- Configure pip to resolve via JFrog ---
       - name: Configure pip to resolve via JFrog
         shell: bash
         run: |
@@ -76,24 +78,32 @@ jobs:
             --repo-resolve "${{ vars.PYPI_VIRTUAL_REPO }}" \
             --server-id-resolve "$SERVER_ID"
 
-      - name: Install deps via JFrog CLI (captures deps to build-info)
+      # --- Avoid pip probing /simple/pip/ (prevents 401 chatter) ---
+      - name: Disable pip self version check
+        shell: bash
+        run: echo "PIP_DISABLE_PIP_VERSION_CHECK=1" >> "$GITHUB_ENV"
+
+      # --- FAST install to capture a CVE into build-info (minimal deps) ---
+      # If .jfrog/fast-requirements.txt exists, use it. Otherwise, just install requests==2.19.1 with --no-deps.
+      - name: Install deps via JFrog CLI (fast capture)
         shell: bash
         run: |
           set -euo pipefail
-          FALLBACK="$GITHUB_WORKSPACE/$REQS_FILE"
           FAST="$GITHUB_WORKSPACE/$REQS_FAST_FILE"
-          if [ -f "$FAST" ]; then
-            INSTALL_FILE="$FAST"
-            echo "Using fast requirements for install: $INSTALL_FILE"
-          else
-            INSTALL_FILE="$FALLBACK"
-            echo "Using full requirements for install: $INSTALL_FILE"
-          fi
           pip uninstall -y requests urllib3 PyYAML || true
-          jf pip install -r "$INSTALL_FILE" \
-            --build-name "$BUILD_NAME" --build-number "$BUILD_NUMBER"
-          echo "Installed versions:"; pip freeze | egrep 'requests|urllib3|PyYAML' || true
+          if [ -f "$FAST" ]; then
+            echo "Using fast requirements file: $FAST"
+            cat "$FAST"
+            jf pip install -r "$FAST" \
+              --build-name "$BUILD_NAME" --build-number "$BUILD_NUMBER"
+          else
+            echo "No fast file found; installing a minimal vulnerable package only."
+            jf pip install "requests==2.19.1" --no-deps \
+              --build-name "$BUILD_NAME" --build-number "$BUILD_NUMBER"
+          fi
+          echo "Installed packages snapshot:"; pip freeze | egrep 'requests|urllib3|PyYAML' || true
 
+      # --- Upload repository artifacts (attach to the same build) ---
       - name: Upload repository artifacts
         shell: bash
         run: |
@@ -101,6 +111,7 @@ jobs:
           jf rt u "**/*" "$GENERIC_REPO/" --flat=false \
             --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER"
 
+      # --- Publish & Scan the build (non-blocking) ---
       - name: Publish build info
         shell: bash
         run: jf rt bp "$BUILD_NAME" "$BUILD_NUMBER"
