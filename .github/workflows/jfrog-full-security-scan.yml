@@ -1,0 +1,69 @@
+# A distinct name for this specific workflow
+name: "JFrog OIDC CI Workflow with Full Security Scan"
+
+on: push
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  # Adjust if you keep the manifest elsewhere
+  REQS_FILE: langgraph/network-security-agent/setup/requirements.txt
+  BUILD_NAME: jfrog-security-scan-build
+  BUILD_NUMBER: ${{ github.run_id }}
+
+jobs:
+  build-scan-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup JFrog CLI
+        uses: jfrog/setup-jfrog-cli@v4
+        env:
+          JF_URL: ${{ vars.JF_URL }}                    # e.g. https://aboavent.jfrog.io
+        with:
+          oidc-provider-name: github-oidc-integration   # must match your JFrog OIDC integration name
+
+      # --- Source SCA (no build/installation) ---
+      - name: Audit manifests for CVEs (non-blocking)
+        run: |
+          jf audit --pip --requirements-file "$REQS_FILE" \
+                   --fail=false --format table
+
+      # --- Code / Secrets / IaC scan of the repo ---
+      - name: Scan repository (non-blocking)
+        run: |
+          jf scan . --fail=false --format table
+
+      # --- Capture dependency graph into build-info (so Build Scan has components) ---
+      - name: Configure pip to resolve via JFrog
+        run: jf pip-config --repo ${{ vars.PYPI_VIRTUAL_REPO }}
+
+      - name: Install deps via JFrog CLI (captures deps to build-info)
+        run: |
+          pip uninstall -y requests urllib3 PyYAML || true
+          jf pip install -r "$REQS_FILE" \
+            --build-name "$BUILD_NAME" --build-number "$BUILD_NUMBER"
+
+      # --- Upload artifacts to Artifactory and attach to the same build ---
+      - name: Upload repository artifacts
+        run: |
+          echo "Uploading source code as artifacts..."
+          jf rt u "**/*" "my-generic-repo/" \
+            --flat=false \
+            --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER"
+
+      # --- Publish & Scan the build in Xray (non-blocking) ---
+      - name: Publish build info
+        run: jf rt bp "$BUILD_NAME" "$BUILD_NUMBER"
+
+      - name: Scan published build (non-blocking)
+        run: jf bs "$BUILD_NAME" "$BUILD_NUMBER" --fail=false
