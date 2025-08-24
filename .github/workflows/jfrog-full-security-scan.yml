@@ -7,10 +7,11 @@ permissions:
   contents: read
 
 env:
-  REQS_FILE: langgraph/network-security-agent/setup/requirements.txt
+  REQS_FILE: langgraph/network-security-agent/setup/requirements.txt   # your full file
+  REQS_FAST_FILE: .jfrog/fast-requirements.txt                         # optional small file for faster runs
   BUILD_NAME: jfrog-security-scan-build
   BUILD_NUMBER: ${{ github.run_id }}
-  GENERIC_REPO: ${{ vars.GENERIC_REPO }}            # e.g., my-generic-repo
+  GENERIC_REPO: ${{ vars.GENERIC_REPO }}                               # e.g., my-generic-repo
 
 jobs:
   build-scan-and-publish:
@@ -24,12 +25,12 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Setup JFrog CLI
+      - name: Setup JFrog CLI (OIDC)
         uses: jfrog/setup-jfrog-cli@v4
         env:
           JF_URL: ${{ vars.JF_URL }}                  # e.g. https://<your-domain>.jfrog.io
         with:
-          oidc-provider-name: github-oidc-integration # must match your JFrog OIDC integration
+          oidc-provider-name: github-oidc-integration
 
       - name: Ensure jq is available
         shell: bash
@@ -52,24 +53,44 @@ jobs:
             echo "- **GENERIC_REPO**: \`${GENERIC_REPO}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # --- Code/Secrets/IaC (no install) ---
+      # --- Code/Secrets/IaC scan (no install) ---
       - name: Scan repository (non-blocking)
         shell: bash
         run: |
           jf scan . --fail=false --format table
 
+      # --- Refresh OIDC (keeps token fresh before Artifactory ops) ---
+      - name: Re-authenticate JFrog CLI (refresh OIDC)
+        uses: jfrog/setup-jfrog-cli@v4
+        env:
+          JF_URL: ${{ vars.JF_URL }}
+        with:
+          oidc-provider-name: github-oidc-integration
+
       # --- Build Scan: capture dependency graph and attach artifacts ---
       - name: Configure pip to resolve via JFrog
         shell: bash
-        run: jf pip-config --repo "${{ vars.PYPI_VIRTUAL_REPO }}"
+        run: |
+          SERVER_ID="${SETUP_JFROG_CLI_SERVER_IDS:-setup-jfrog-cli-server}"
+          jf pip-config \
+            --repo-resolve "${{ vars.PYPI_VIRTUAL_REPO }}" \
+            --server-id-resolve "$SERVER_ID"
 
       - name: Install deps via JFrog CLI (captures deps to build-info)
         shell: bash
         run: |
           set -euo pipefail
-          REQS_ABS="$GITHUB_WORKSPACE/$REQS_FILE"
+          FALLBACK="$GITHUB_WORKSPACE/$REQS_FILE"
+          FAST="$GITHUB_WORKSPACE/$REQS_FAST_FILE"
+          if [ -f "$FAST" ]; then
+            INSTALL_FILE="$FAST"
+            echo "Using fast requirements for install: $INSTALL_FILE"
+          else
+            INSTALL_FILE="$FALLBACK"
+            echo "Using full requirements for install: $INSTALL_FILE"
+          fi
           pip uninstall -y requests urllib3 PyYAML || true
-          jf pip install -r "$REQS_ABS" \
+          jf pip install -r "$INSTALL_FILE" \
             --build-name "$BUILD_NAME" --build-number "$BUILD_NUMBER"
           echo "Installed versions:"; pip freeze | egrep 'requests|urllib3|PyYAML' || true
 
