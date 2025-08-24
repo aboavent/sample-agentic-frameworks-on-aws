@@ -31,10 +31,10 @@ jobs:
           echo "Uploading source code as an artifact..."
           jf rt u "*" my-generic-repo/ --build-name=$BUILD_NAME --build-number=$BUILD_NUMBER
 
-          # 2. Scan the build for vulnerabilities against your Xray policies
-          echo "Scanning build..."
-          jf bs $BUILD_NAME $BUILD_NUMBER --fail=false
-
-          # 3. Publish the build information (including scan results)
+          # 2. Publish the build information (including scan results)
           echo "Publishing build info..."
           jf rt bp $BUILD_NAME $BUILD_NUMBER
+
+          # 3. Scan the build for vulnerabilities against your Xray policies
+          echo "Scanning build..."
+          jf bs $BUILD_NAME $BUILD_NUMBER --fail=false
