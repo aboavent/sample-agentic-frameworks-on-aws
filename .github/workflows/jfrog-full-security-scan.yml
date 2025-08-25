@@ -1,17 +1,24 @@
 name: "JFrog OIDC CI Workflow with Full Security Scan"
 
-on: push
+on:
+  push:
+  workflow_dispatch:
 
 permissions:
   id-token: write
   contents: read
 
+# ===== Global defaults (override via repo Variables) =====
 env:
-  REQS_FILE: langgraph/network-security-agent/setup/requirements.txt
-  REQS_FAST_FILE: ci/fast-requirements.txt          # small, fast file (e.g., requests==2.19.1)
-  BUILD_NAME: jfrog-security-scan-build
-  BUILD_NUMBER: ${{ github.run_id }}
-  GENERIC_REPO: ${{ vars.GENERIC_REPO }}           # e.g., my-generic-repo
+  PYTHON_VERSION: ${{ vars.PYTHON_VERSION || '3.11' }}
+  REQS_FILE: ${{ vars.REQS_FILE || 'ci/fast-requirements.txt' }}   # ← fast file by default
+  BUILD_NAME: ${{ vars.BUILD_NAME || 'jfrog-security-scan-build' }}
+  BUILD_NUMBER: ${{ vars.BUILD_NUMBER || github.run_id }}
+  GENERIC_REPO: ${{ vars.GENERIC_REPO || 'my-generic-repo' }}
+  PYPI_VIRTUAL_REPO: ${{ vars.PYPI_VIRTUAL_REPO || 'myrepo-pypi' }}
+  UPLOAD_PATTERN: ${{ vars.UPLOAD_PATTERN || '**/*' }}
+  UPLOAD_EXCLUSIONS: ${{ vars.UPLOAD_EXCLUSIONS || '**/.git/**;**/.github/**;**/.jfrog/**' }}
+  FAIL_ON_VULNS: ${{ vars.FAIL_ON_VULNS || 'false' }}   # 'true' to gate the build
 
 jobs:
   build-scan-and-publish:
@@ -23,12 +30,12 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Setup JFrog CLI (OIDC)
         uses: jfrog/setup-jfrog-cli@v4
         env:
-          JF_URL: ${{ vars.JF_URL }}                # e.g. https://<your-domain>.jfrog.io
+          JF_URL: ${{ vars.JF_URL }}                     # REQUIRED: e.g. https://<your>.jfrog.io
         with:
           oidc-provider-name: github-oidc-integration
 
@@ -39,27 +46,29 @@ jobs:
             sudo apt-get update -y && sudo apt-get install -y jq
           fi
 
-      - name: "Sanity: show PyPI virtual repo details"
+      - name: "Sanity: show effective settings"
         shell: bash
         run: |
           set -euo pipefail
-          KEY="${{ vars.PYPI_VIRTUAL_REPO }}"
-          echo "Using PYPI_VIRTUAL_REPO=$KEY"
-          jf rt curl -s -XGET "/api/repositories/$KEY" | jq '{key,packageType,type,repositories,defaultDeploymentRepo}'
+          echo "REQS_FILE=${{ env.REQS_FILE }}"
+          echo "PYPI_VIRTUAL_REPO=${{ env.PYPI_VIRTUAL_REPO }}"
+          echo "GENERIC_REPO=${{ env.GENERIC_REPO }}"
+          echo "UPLOAD_EXCLUSIONS=${{ env.UPLOAD_EXCLUSIONS }}"
+          jf rt curl -s -XGET "/api/repositories/${{ env.PYPI_VIRTUAL_REPO }}" | jq '{key,packageType,type,repositories,defaultDeploymentRepo}'
           {
             echo "### JFrog Settings"
             echo "- **JF_URL**: \`${{ vars.JF_URL }}\`"
-            echo "- **PYPI_VIRTUAL_REPO**: \`$KEY\`"
-            echo "- **GENERIC_REPO**: \`${GENERIC_REPO}\`"
+            echo "- **PYPI_VIRTUAL_REPO**: \`${{ env.PYPI_VIRTUAL_REPO }}\`"
+            echo "- **GENERIC_REPO**: \`${{ env.GENERIC_REPO }}\`"
+            echo "- **REQS_FILE**: \`${{ env.REQS_FILE }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # --- Source/Secrets/IaC scan (no install) ---
+      # Source/Secrets/IaC scan (non-blocking)
       - name: Scan repository (non-blocking)
         shell: bash
-        run: |
-          jf scan . --fail=false --format table
+        run: jf scan . --fail=false --format table
 
-      # --- Refresh OIDC so installs start with a fresh token ---
+      # Refresh OIDC so the install starts with a fresh token
       - name: Re-authenticate JFrog CLI (refresh OIDC)
         uses: jfrog/setup-jfrog-cli@v4
         env:
@@ -67,59 +76,48 @@ jobs:
         with:
           oidc-provider-name: github-oidc-integration
 
-      # --- Configure pip to resolve via JFrog ---
+      # Configure pip to resolve via JFrog
       - name: Configure pip to resolve via JFrog
         shell: bash
         run: |
           SERVER_ID="${SETUP_JFROG_CLI_SERVER_IDS:-setup-jfrog-cli-server}"
           jf pip-config \
-            --repo-resolve "${{ vars.PYPI_VIRTUAL_REPO }}" \
+            --repo-resolve "${{ env.PYPI_VIRTUAL_REPO }}" \
             --server-id-resolve "$SERVER_ID"
 
-      # --- Avoid pip probing /simple/pip/ (cuts extra 401s) ---
+      # Avoid pip probing /simple/pip/
       - name: Disable pip self version check
         shell: bash
         run: echo "PIP_DISABLE_PIP_VERSION_CHECK=1" >> "$GITHUB_ENV"
 
-      # --- FAST install to capture a CVE into build-info (minimal deps) ---
-      - name: Install deps via JFrog CLI (fast capture)
+      # Install requirements (fast file by default) and capture to build-info
+      - name: Install deps via JFrog CLI
         shell: bash
         run: |
           set -euo pipefail
-          FAST="$GITHUB_WORKSPACE/$REQS_FAST_FILE"
+          REQS_ABS="$GITHUB_WORKSPACE/${{ env.REQS_FILE }}"
+          echo "Installing from: $REQS_ABS"
+          ls -l "$REQS_ABS"
           pip uninstall -y requests urllib3 PyYAML || true
-          if [ -f "$FAST" ]; then
-            echo "Using fast requirements file: $FAST"
-            cat "$FAST"
-            jf pip install -r "$FAST" \
-              --build-name "$BUILD_NAME" --build-number "$BUILD_NUMBER"
-          else
-            echo "No fast file found; installing a minimal vulnerable package only."
-            jf pip install "requests==2.19.1" --no-deps \
-              --build-name "$BUILD_NAME" --build-number "$BUILD_NUMBER"
-          fi
-          echo "Installed packages snapshot:"; pip freeze | egrep 'requests|urllib3|PyYAML' || true
+          jf pip install -r "$REQS_ABS" \
+            --build-name "${{ env.BUILD_NAME }}" --build-number "${{ env.BUILD_NUMBER }}"
+          echo "Installed snapshot:"; pip freeze | head -n 200 || true
 
-      # --- Clean up local JFrog metadata so it won't be uploaded ---
+      # Clean up local JFrog metadata so it won't be uploaded
       - name: Remove JFrog local metadata
         shell: bash
         run: rm -rf .jfrog || true
 
-      # --- Upload repository artifacts (exclude dot-dirs) ---
+      # Upload repository artifacts (exclude dot-dirs)
       - name: Upload repository artifacts
         shell: bash
         run: |
-          echo "Uploading source code as artifacts to $GENERIC_REPO..."
-          jf rt u "**/*" "$GENERIC_REPO/" \
+          echo "Uploading artifacts to ${{ env.GENERIC_REPO }}..."
+          jf rt u "${{ env.UPLOAD_PATTERN }}" "${{ env.GENERIC_REPO }}/" \
             --flat=false \
-            --exclusions="**/.git/**;**/.github/**;**/.jfrog/**" \
-            --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER"
+            --exclusions="${{ env.UPLOAD_EXCLUSIONS }}" \
+            --build-name="${{ env.BUILD_NAME }}" --build-number="${{ env.BUILD_NUMBER }}"
 
-      # --- Publish & Scan the build (non-blocking) ---
+      # Publish & Scan the build
       - name: Publish build info
-        shell: bash
-        run: jf rt bp "$BUILD_NAME" "$BUILD_NUMBER"
-
-      - name: Scan published build (non-blocking)
-        shell: bash
-        run: jf bs "$BUILD_NAME" "$BUILD_NUMBER" --fail=false
+        shell: bas
