@@ -120,4 +120,9 @@ jobs:
 
       # Publish & Scan the build
       - name: Publish build info
-        shell: bas
+        shell: bash
+        run: jf rt bp "${{ env.BUILD_NAME }}" "${{ env.BUILD_NUMBER }}"
+
+      - name: Scan published build (policy-gated)
+        shell: bash
+        run: jf bs "${{ env.BUILD_NAME }}" "${{ env.BUILD_NUMBER }}" --fail=${{ env.FAIL_ON_VULNS }}
