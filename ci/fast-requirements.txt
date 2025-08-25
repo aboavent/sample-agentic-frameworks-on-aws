@@ -1,4 +1,4 @@
-requests==2.19.1
-#requests>=2.20.0
+#requests==2.19.1
+requests>=2.20.0
 # optional: add one more for variety
-PyYAML==5.3.1
+#PyYAML==5.3.1
